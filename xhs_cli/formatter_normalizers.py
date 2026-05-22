@@ -42,13 +42,26 @@ def normalize_note_detail(data: dict[str, Any]) -> dict[str, Any] | None:
     if not items:
         return None
 
-    note = items[0].get("note_card", {})
+    item = items[0]
+    note = item.get("note_card", item.get("note", {}))
     user = note.get("user", {})
     interact = note.get("interact_info", {})
     tags = note.get("tag_list", [])
 
+    # Try to get time from multiple locations
+    time_val = (
+        note.get("time")
+        or note.get("timestamp")
+        or note.get("create_time")
+        or note.get("ctime")
+        or item.get("time")
+        or item.get("timestamp")
+        or item.get("create_time")
+        or item.get("ctime")
+    )
+
     return {
-        "title": note.get("title", "Untitled"),
+        "title": note.get("title", note.get("display_title", "Untitled")),
         "desc": note.get("desc", ""),
         "author": user.get("nickname", "Unknown"),
         "liked_count": interact.get("liked_count", "0"),
@@ -57,22 +70,61 @@ def normalize_note_detail(data: dict[str, Any]) -> dict[str, Any] | None:
         "share_count": interact.get("share_count", "0"),
         "tags": [tag.get("name", "") for tag in tags if tag.get("name")],
         "image_count": len(note.get("image_list", [])),
+        "time": time_val,
     }
 
 
 def normalize_note_summary(item: dict[str, Any]) -> dict[str, Any] | None:
+    # Skip items that are not notes
+    model_type = item.get("model_type")
+    if model_type and model_type != "note":
+        return None
+
     note_card = item.get("note_card", item)
     if not isinstance(note_card, dict):
         return None
+
+    # If there's no note_card but the item itself doesn't look like a note, skip it
+    if "note_card" not in item and "title" not in note_card and "display_title" not in note_card:
+        return None
+
+    # Check if title field exists and get its value
+    has_title = "title" in note_card
+    has_display_title = "display_title" in note_card
+    title = str(note_card.get("title", note_card.get("display_title", "")))[:40]
+
+    # Skip if title field explicitly exists and is empty (probably deleted note)
+    # Also skip if both title fields don't exist and title is empty
+    if (has_title or has_display_title) and (not title or title.isspace()):
+        return None
+    if not (has_title or has_display_title) and (not title or title.isspace()):
+        return None
+
     user = note_card.get("user", {})
     interact = note_card.get("interact_info", {})
+
+    # Extract relative time from corner_tag_info if available
+    time_str = None
+    corner_tags = note_card.get("corner_tag_info", [])
+    for tag in corner_tags:
+        if isinstance(tag, dict) and tag.get("type") == "publish_time":
+            time_str = tag.get("text")
+            break
+
     return {
-        "title": str(note_card.get("title", note_card.get("display_title", "")))[:40],
+        "title": title,
         "author": user.get("nickname", ""),
         "liked": str(interact.get("liked_count", "")),
         "note_type": "video" if note_card.get("type") == "video" else "image",
         "note_id": item.get("id", note_card.get("note_id", "")),
         "xsec_token": item.get("xsec_token", note_card.get("xsec_token", "")),
+        "time": (
+            note_card.get("time")
+            or note_card.get("timestamp")
+            or note_card.get("create_time")
+            or note_card.get("ctime")
+        ),
+        "time_str": time_str,
     }
 
 
@@ -93,6 +145,12 @@ def normalize_comments(data: dict[str, Any]) -> list[dict[str, Any]]:
             "content": comment.get("content", ""),
             "like_count": comment.get("like_count", "0"),
             "sub_comment_count": _coerce_int(comment.get("sub_comment_count", 0)),
+            "time": (
+                comment.get("time")
+                or comment.get("timestamp")
+                or comment.get("create_time")
+                or comment.get("ctime")
+            ),
         })
     return normalized
 
@@ -100,15 +158,53 @@ def normalize_comments(data: dict[str, Any]) -> list[dict[str, Any]]:
 def normalize_feed(data: dict[str, Any]) -> list[dict[str, Any]]:
     normalized = []
     for item in data.get("items", [])[:20]:
+        # Skip items that are not notes
+        model_type = item.get("model_type")
+        if model_type and model_type != "note":
+            continue
+
         note_card = item.get("note_card", {})
+
+        # Skip if there's no note_card and no title fields
+        if "note_card" not in item and "title" not in note_card and "display_title" not in note_card:
+            continue
+
+        # Check if title field exists and get its value
+        has_title = "title" in note_card
+        has_display_title = "display_title" in note_card
+        title = note_card.get("title", note_card.get("display_title", ""))[:40]
+
+        # Skip if title field explicitly exists and is empty (probably deleted note)
+        # Also skip if both title fields don't exist and title is empty
+        if (has_title or has_display_title) and (not title or title.isspace()):
+            continue
+        if not (has_title or has_display_title) and (not title or title.isspace()):
+            continue
+
         user = note_card.get("user", {})
         interact = note_card.get("interact_info", {})
+
+        # Extract relative time from corner_tag_info if available
+        time_str = None
+        corner_tags = note_card.get("corner_tag_info", [])
+        for tag in corner_tags:
+            if isinstance(tag, dict) and tag.get("type") == "publish_time":
+                time_str = tag.get("text")
+                break
+
         normalized.append({
-            "title": note_card.get("title", note_card.get("display_title", ""))[:40],
+            "title": title,
             "author": user.get("nickname", ""),
             "liked": str(interact.get("liked_count", "")),
             "note_id": item.get("id", ""),
             "xsec_token": item.get("xsec_token", note_card.get("xsec_token", "")),
+            "time": (
+                note_card.get("time")
+                or note_card.get("timestamp")
+                or note_card.get("create_time")
+                or note_card.get("ctime")
+            ),
+            "time_str": time_str,
         })
     return normalized
 
@@ -116,12 +212,27 @@ def normalize_feed(data: dict[str, Any]) -> list[dict[str, Any]]:
 def normalize_user_posts(notes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized = []
     for note in notes:
+        # Check if title field exists and get its value
+        has_display_title = "display_title" in note
+        title = note.get("display_title", "")[:40]
+
+        # Only skip if title field explicitly exists and is empty (probably deleted note)
+        # If title field doesn't exist, keep the note (could be test data or old API format)
+        if has_display_title and (not title or title.isspace()):
+            continue
+
         interact = note.get("interact_info", {})
         normalized.append({
-            "title": note.get("display_title", "")[:40],
+            "title": title,
             "liked": str(interact.get("liked_count", note.get("liked_count", ""))),
             "note_type": "video" if note.get("type") == "video" else "image",
             "note_id": note.get("note_id", ""),
+            "time": (
+                note.get("time")
+                or note.get("timestamp")
+                or note.get("create_time")
+                or note.get("ctime")
+            ),
         })
     return normalized
 
@@ -169,6 +280,12 @@ def normalize_creator_notes(data: Any) -> list[dict[str, Any]]:
             "comment_count": str(note.get("comment_count", interact.get("comment_count", ""))),
             "status": note.get("status"),
             "note_id": note.get("note_id", note.get("id", "")),
+            "time": (
+                note.get("time")
+                or note.get("timestamp")
+                or note.get("create_time")
+                or note.get("ctime")
+            ),
         })
     return normalized
 

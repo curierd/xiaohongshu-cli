@@ -45,12 +45,20 @@ def save_index_from_items(data: dict, *, xsec_source: str) -> None:
 
 def save_index_from_notes(notes: list[dict]) -> None:
     """Persist ordered note references from paged note payloads."""
-    save_note_index([
-        {
-            "note_id": str(note.get("note_id", note.get("id", ""))).strip(),
+    entries = []
+    for note in notes:
+        note_id = str(note.get("note_id", note.get("id", ""))).strip()
+        if not note_id:
+            continue
+        # Only skip if title field explicitly exists and is empty (probably deleted note)
+        # If title field doesn't exist, keep the note (could be test data or old API format)
+        has_display_title = "display_title" in note
+        title = note.get("display_title", "")[:40]
+        if has_display_title and (not title or title.isspace()):
+            continue
+        entries.append({
+            "note_id": note_id,
             "xsec_token": str(note.get("xsec_token", "")).strip(),
             "xsec_source": "",
-        }
-        for note in notes
-        if str(note.get("note_id", note.get("id", ""))).strip()
-    ])
+        })
+    save_note_index(entries)

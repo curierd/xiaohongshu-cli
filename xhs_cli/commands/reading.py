@@ -59,6 +59,8 @@ TYPE_MAP = {
 @click.pass_context
 def search(ctx, keyword: str, sort: str, note_type: str, page: int, as_json: bool, as_yaml: bool):
     """Search notes by keyword."""
+    from ..formatter_normalizers import normalize_note_summary
+
     def _search_action(client):
         result = client.search_notes(
             keyword=keyword,
@@ -67,7 +69,38 @@ def search(ctx, keyword: str, sort: str, note_type: str, page: int, as_json: boo
             note_type=TYPE_MAP[note_type],
         )
         _cache_tokens_from_items(result, xsec_source="pc_search")
-        save_index_from_items(result, xsec_source="pc_search")
+
+        # Filter items the same way as display to keep index in sync
+        filtered_items = []
+        for item in result.get("items", []):
+            # Skip items that are not notes
+            model_type = item.get("model_type")
+            if model_type and model_type != "note":
+                continue
+
+            note_card = item.get("note_card", {})
+
+            # Skip if there's no note_card and no title fields
+            if "note_card" not in item and "title" not in note_card and "display_title" not in note_card:
+                continue
+
+            # Check if title field exists and get its value
+            has_title = "title" in note_card
+            has_display_title = "display_title" in note_card
+            title = str(note_card.get("title", note_card.get("display_title", "")))[:40]
+
+            # Skip if title field explicitly exists and is empty (probably deleted note)
+            # Also skip if both title fields don't exist and title is empty
+            if (has_title or has_display_title) and (not title or title.isspace()):
+                continue
+            if not (has_title or has_display_title) and (not title or title.isspace()):
+                continue
+
+            filtered_items.append(item)
+
+        # Create a filtered result for index saving
+        filtered_result = {**result, "items": filtered_items}
+        save_index_from_items(filtered_result, xsec_source="pc_search")
         return result
 
     handle_command(
@@ -198,7 +231,38 @@ def feed(ctx, as_json: bool, as_yaml: bool):
     def _feed_action(client):
         result = client.get_home_feed()
         _cache_tokens_from_items(result, xsec_source="pc_feed")
-        save_index_from_items(result, xsec_source="pc_feed")
+
+        # Filter items the same way as display to keep index in sync
+        filtered_items = []
+        for item in result.get("items", []):
+            # Skip items that are not notes
+            model_type = item.get("model_type")
+            if model_type and model_type != "note":
+                continue
+
+            note_card = item.get("note_card", {})
+
+            # Skip if there's no note_card and no title fields
+            if "note_card" not in item and "title" not in note_card and "display_title" not in note_card:
+                continue
+
+            # Check if title field exists and get its value
+            has_title = "title" in note_card
+            has_display_title = "display_title" in note_card
+            title = note_card.get("title", note_card.get("display_title", ""))[:40]
+
+            # Skip if title field explicitly exists and is empty (probably deleted note)
+            # Also skip if both title fields don't exist and title is empty
+            if (has_title or has_display_title) and (not title or title.isspace()):
+                continue
+            if not (has_title or has_display_title) and (not title or title.isspace()):
+                continue
+
+            filtered_items.append(item)
+
+        # Create a filtered result for index saving
+        filtered_result = {**result, "items": filtered_items}
+        save_index_from_items(filtered_result, xsec_source="pc_feed")
         return result
 
     handle_command(
@@ -285,7 +349,38 @@ def hot(ctx, category: str, as_json: bool, as_yaml: bool):
     def _hot_action(client):
         result = client.get_hot_feed(HOT_CATEGORIES[category])
         _cache_tokens_from_items(result, xsec_source="pc_feed")
-        save_index_from_items(result, xsec_source="pc_feed")
+
+        # Filter items the same way as display to keep index in sync
+        filtered_items = []
+        for item in result.get("items", []):
+            # Skip items that are not notes
+            model_type = item.get("model_type")
+            if model_type and model_type != "note":
+                continue
+
+            note_card = item.get("note_card", {})
+
+            # Skip if there's no note_card and no title fields
+            if "note_card" not in item and "title" not in note_card and "display_title" not in note_card:
+                continue
+
+            # Check if title field exists and get its value
+            has_title = "title" in note_card
+            has_display_title = "display_title" in note_card
+            title = note_card.get("title", note_card.get("display_title", ""))[:40]
+
+            # Skip if title field explicitly exists and is empty (probably deleted note)
+            # Also skip if both title fields don't exist and title is empty
+            if (has_title or has_display_title) and (not title or title.isspace()):
+                continue
+            if not (has_title or has_display_title) and (not title or title.isspace()):
+                continue
+
+            filtered_items.append(item)
+
+        # Create a filtered result for index saving
+        filtered_result = {**result, "items": filtered_items}
+        save_index_from_items(filtered_result, xsec_source="pc_feed")
         return result
 
     handle_command(
