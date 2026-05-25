@@ -32,6 +32,7 @@ from .exceptions import (
     SignatureError,
     XhsApiError,
 )
+from .captcha_handler import handle_captcha_with_browser
 from .signing import build_get_uri, sign_main_api
 
 logger = logging.getLogger(__name__)
@@ -111,6 +112,8 @@ class XhsClient(
     def _handle_response(self, resp: httpx.Response) -> Any:
         if resp.status_code in (461, 471):
             self._verify_count += 1
+            verify_type = resp.headers.get("verifytype", "unknown")
+            verify_uuid = resp.headers.get("verifyuuid", "unknown")
             cooldown = min(30, 5 * (2 ** (self._verify_count - 1)))
             logger.warning(
                 "Captcha triggered (count=%d), cooling down %.0fs before raising",
@@ -119,8 +122,8 @@ class XhsClient(
             self._request_delay = max(self._request_delay, self._base_request_delay * 2)
             time.sleep(cooldown)
             raise NeedVerifyError(
-                verify_type=resp.headers.get("verifytype", "unknown"),
-                verify_uuid=resp.headers.get("verifyuuid", "unknown"),
+                verify_type=verify_type,
+                verify_uuid=verify_uuid,
             )
 
         self._verify_count = 0
@@ -160,8 +163,9 @@ class XhsClient(
     def _request_with_retry(self, method: str, url: str, **kwargs) -> httpx.Response:
         self._rate_limit_delay()
         last_exc: Exception | None = None
+        captcha_handled = False
 
-        for attempt in range(self._max_retries):
+        for attempt in range(self._max_retries + 1):  # +1 for captcha retry
             try:
                 resp = self._http.request(method, url, **kwargs)
                 self._merge_response_cookies(resp)
@@ -175,6 +179,27 @@ class XhsClient(
                     time.sleep(wait)
                     continue
                 return resp
+            except NeedVerifyError as exc:
+                if captcha_handled:
+                    logger.warning("Captcha already handled once, not retrying")
+                    raise
+
+                # Try browser verification
+                logger.warning("Captcha required, attempting browser verification")
+                updated_cookies = handle_captcha_with_browser(
+                    self.cookies, exc.verify_type, exc.verify_uuid
+                )
+
+                if updated_cookies:
+                    self.cookies = updated_cookies
+                    self._verify_count = 0
+                    self._request_delay = self._base_request_delay
+                    captcha_handled = True
+                    logger.info("Retrying request after captcha handling")
+                    continue
+
+                # Browser verification failed
+                raise
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 last_exc = exc
                 wait = (2 ** attempt) + random.uniform(0, 1)
@@ -186,7 +211,7 @@ class XhsClient(
 
         if last_exc:
             raise XhsApiError(f"Request failed after {self._max_retries} retries: {last_exc}") from last_exc
-        raise XhsApiError(f"Request failed after {self._max_retries} retries: HTTP {resp.status_code}")
+        raise XhsApiError(f"Request failed after {self._max_retries} retries")
 
     def _main_api_get(
         self,
