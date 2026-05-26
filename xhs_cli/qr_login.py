@@ -545,4 +545,16 @@ def qrcode_login(
         except BrowserQrLoginUnavailable as exc:
             logger.info("Browser-assisted QR login unavailable, falling back to HTTP flow: %s", exc)
 
-    return _http_qrcode_login(on_status=on_status, timeout_s=timeout_s)
+    # Try HTTP flow first
+    try:
+        return _http_qrcode_login(on_status=on_status, timeout_s=timeout_s)
+    except NeedVerifyError as exc:
+        # HTTP flow hit captcha, try browser-assisted login to handle it
+        logger.info("HTTP QR login hit captcha (type=%s), falling back to browser-assisted login...", exc.verify_type)
+        try:
+            return _browser_assisted_qrcode_login(on_status=on_status, timeout_s=timeout_s)
+        except BrowserQrLoginUnavailable as exc2:
+            logger.info("Browser-assisted QR login unavailable: %s", exc2)
+            raise exc  # Re-raise the original captcha error
+    except XhsApiError:
+        raise
